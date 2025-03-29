@@ -1,4 +1,6 @@
 .zip
 *.log
 *.docx
+.DS_Store
 .DS_Storebert_sentiment_model.pt
+.png
