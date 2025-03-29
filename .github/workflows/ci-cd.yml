@@ -23,6 +23,8 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           # Pin Werkzeug to a compatible version
           pip install werkzeug==2.0.3
+          # Install prometheus_client
+          pip install prometheus_client
           pip install pytest pytest-cov
           
       - name: Download NLTK resources
