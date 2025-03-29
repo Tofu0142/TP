@@ -1,6 +1,14 @@
-FROM python:3.9-slim
+
+FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
 
 WORKDIR /app
+
+# Install additional system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 
 # Install dependencies
 COPY requirements.txt .
