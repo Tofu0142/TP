@@ -13,7 +13,7 @@ COPY . .
 RUN python -c "from transformers import BertTokenizer; BertTokenizer.from_pretrained('bert-base-uncased')"
 
 # Expose the port
-EXPOSE 5000
+EXPOSE 8080
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
