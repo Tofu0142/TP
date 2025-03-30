@@ -61,18 +61,35 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest
           
-  deploy:
+  deploy-to-gcp:
     needs: build-and-push
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
-      - name: Deploy to production
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: tp-tf-95280
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+      
+      - name: Configure Docker for GCR
         run: |
-          echo "Deploying to production server"
-          # Add deployment commands here (e.g., SSH into server and pull latest image)
-          # Example:
-          # ssh ${{ secrets.PROD_SERVER_USER }}@${{ secrets.PROD_SERVER_HOST }} \
-          #   "docker pull ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest && \
-          #    docker stop sentiment-analysis || true && \
-          #    docker rm sentiment-analysis || true && \
-          #    docker run -d --name sentiment-analysis -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest"
+          gcloud auth configure-docker gcr.io
+      
+      - name: Pull image from Docker Hub and push to GCR
+        run: |
+          docker pull ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest
+          docker tag ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest gcr.io/tp-tf-95280/sentiment-analysis:latest
+          docker push gcr.io/tp-tf-95280/sentiment-analysis:latest
+      
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy sentiment-analysis \
+            --image gcr.io/tp-tf-95280/sentiment-analysis:latest \
+            --platform managed \
+            --region us-central1 \
+            --allow-unauthenticated
