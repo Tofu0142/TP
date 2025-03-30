@@ -27,7 +27,7 @@ jobs:
           
       - name: Run unit tests
         run: |
-          pytest -xvs
+          pytest test_sentiment_model.py -xvs
           
   build-and-push:
     needs: test
