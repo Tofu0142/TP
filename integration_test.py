@@ -15,7 +15,7 @@ class TestModelServerIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the test class - start the server in a separate thread."""
-        # 使用模拟对象替代实际服务器
+        
         cls.server_thread = None
         cls.app = model_server.app
         cls.app.testing = True
@@ -24,14 +24,14 @@ class TestModelServerIntegration(unittest.TestCase):
     def test_predict_endpoint(self):
         """Test the /predict endpoint."""
         with patch('model_server.predict_sentiment_internal') as mock_predict:
-            # 模拟预测函数
+           
             mock_predict.return_value = ('positive', 0.9)
             
-            # 发送请求
+            
             response = self.client.post('/predict', 
                                       json={'text': 'This is a test.'})
             
-            # 检查响应
+            
             self.assertEqual(response.status_code, 200)
             data = response.get_json()
             self.assertEqual(data['sentiment'], 'positive')
@@ -41,14 +41,14 @@ class TestModelServerIntegration(unittest.TestCase):
     def test_predict_batch_endpoint(self):
         """Test the /predict_batch endpoint."""
         with patch('model_server.predict_sentiment_internal') as mock_predict:
-            # 模拟预测函数
+            
             mock_predict.return_value = ('positive', 0.9)
             
-            # 发送请求
+            
             response = self.client.post('/predict_batch', 
                                       json={'texts': ['Test 1', 'Test 2']})
             
-            # 检查响应
+            
             self.assertEqual(response.status_code, 200)
             data = response.get_json()
             self.assertEqual(len(data['results']), 2)
@@ -57,10 +57,10 @@ class TestModelServerIntegration(unittest.TestCase):
     
     def test_metrics_endpoint(self):
         """Test the /metrics endpoint."""
-        # 发送请求
+       
         response = self.client.get('/metrics')
         
-        # 检查响应
+        
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertIn('total_requests', data)
@@ -68,10 +68,10 @@ class TestModelServerIntegration(unittest.TestCase):
     
     def test_health_endpoint(self):
         """Test the /health endpoint."""
-        # 发送请求
+        
         response = self.client.get('/health')
         
-        # 检查响应
+        
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertEqual(data['status'], 'healthy')
