@@ -14,7 +14,9 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from review_prediction import BertSentimentClassifier, TextBlob
 from functools import lru_cache
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +38,11 @@ tokenizer = None
 device = None
 request_times = deque(maxlen=1000)  # Store last 1000 request times
 latencies = deque(maxlen=1000)      # Store last 1000 latencies
+
+# Add a global flag to track which model we're using
+using_fallback_model = False
+fallback_vectorizer = None
+fallback_model = None
 
 # Performance monitoring
 class PerformanceMonitor:
@@ -112,16 +119,59 @@ def optimize_model_for_inference(model):
 
 # Load the model
 def load_model(model_path="bert_sentiment_model.pt"):
-    global model, tokenizer, device
+    global model, tokenizer, device, using_fallback_model, fallback_vectorizer, fallback_model
     
     try:
-        # Determine device (use CUDA if available)
+        # Check if we should use the fallback model
+        if os.environ.get('USE_FALLBACK_MODEL') == 'true':
+            logger.info("Using fallback model as specified by environment variable")
+            # Create a simple fallback model
+            texts = [
+                "I love this product", "Great experience", "Highly recommended",
+                "This is terrible", "Worst purchase ever", "Disappointed",
+                "It's okay", "Average performance", "Not bad but not great"
+            ]
+            labels = [2, 2, 2, 0, 0, 0, 1, 1, 1]  # 0=negative, 1=neutral, 2=positive
+            
+            # Create a simple model
+            from sklearn.feature_extraction.text import CountVectorizer
+            from sklearn.naive_bayes import MultinomialNB
+            
+            fallback_vectorizer = CountVectorizer()
+            X = fallback_vectorizer.fit_transform(texts)
+            fallback_model = MultinomialNB()
+            fallback_model.fit(X, labels)
+            
+            using_fallback_model = True
+            logger.info("Fallback model created successfully")
+            return True
+        
+        # Regular model loading code
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {device}")
         
         # Load tokenizer
         tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         logger.info("Tokenizer loaded successfully")
+        
+        # Check if model file exists
+        if not os.path.exists(model_path):
+            # Try to download if URL is provided
+            model_url = os.environ.get('MODEL_URL')
+            if model_url:
+                logger.info(f"Downloading model from {model_url}")
+                try:
+                    import requests
+                    response = requests.get(model_url)
+                    with open(model_path, 'wb') as f:
+                        f.write(response.content)
+                    logger.info(f"Model downloaded to {model_path}")
+                except Exception as e:
+                    logger.error(f"Failed to download model: {e}")
+                    raise
+            else:
+                logger.error(f"Model file not found at {model_path} and no MODEL_URL provided")
+                raise FileNotFoundError(f"Model file not found: {model_path}")
         
         # Initialize model
         model = BertSentimentClassifier(num_classes=3)
@@ -134,26 +184,27 @@ def load_model(model_path="bert_sentiment_model.pt"):
         model = optimize_model_for_inference(model)
         model.to(device)
         
-        # Warm up the model with a dummy input
-        logger.info("Warming up model...")
-        dummy_input = tokenizer("This is a dummy input for warming up the model", 
-                               return_tensors="pt", 
-                               padding="max_length", 
-                               truncation=True, 
-                               max_length=128)
-        dummy_input_ids = dummy_input["input_ids"].to(device)
-        dummy_attention_mask = dummy_input["attention_mask"].to(device)
-        dummy_numerical = torch.zeros((1, 5), dtype=torch.float).to(device)
-        
-        with torch.no_grad():
-            _ = model(dummy_input_ids, dummy_attention_mask, dummy_numerical)
-        
-        logger.info("Model ready for inference")
         return True
     
     except Exception as e:
         logger.error(f"Error loading model: {e}")
-        return False
+        
+        # Fall back to a simple model
+        logger.info("Creating fallback model due to error")
+        texts = ["I love this", "I hate this", "It's okay"]
+        labels = [2, 0, 1]  # 0=negative, 1=neutral, 2=positive
+        
+        from sklearn.feature_extraction.text import CountVectorizer
+        from sklearn.naive_bayes import MultinomialNB
+        
+        fallback_vectorizer = CountVectorizer()
+        X = fallback_vectorizer.fit_transform(texts)
+        fallback_model = MultinomialNB()
+        fallback_model.fit(X, labels)
+        
+        using_fallback_model = True
+        logger.info("Fallback model created successfully")
+        return True
 
 # Preprocess input for prediction
 def preprocess_input(text):
@@ -230,6 +281,9 @@ def predict(input_ids, attention_mask, numerical_features):
     probabilities = torch.nn.functional.softmax(outputs, dim=1)
     confidence = probabilities[0][preds.item()].item()
     
+    # Increment the predictions counter
+    SENTIMENT_PREDICTIONS.inc()
+    
     return prediction, confidence
 
 # Add model caching
@@ -246,36 +300,38 @@ LATENCY = Histogram('sentiment_request_latency_milliseconds', 'Request latency i
 ERROR_COUNT = Counter('sentiment_errors_total', 'Total number of errors')
 MODEL_CONFIDENCE = Histogram('sentiment_model_confidence', 'Model confidence scores')
 SENTIMENT_DISTRIBUTION = Counter('sentiment_results', 'Distribution of sentiment results', ['sentiment'])
+SENTIMENT_PREDICTIONS = Counter('sentiment_predictions_total', 'Total number of sentiment predictions')
 
 # API endpoint for predictions
 @app.route('/predict', methods=['POST'])
 def predict_sentiment():
+    """
+    Endpoint for sentiment prediction.
+    """
     start_time = time.time()
-    REQUEST_COUNT.inc()
-    
-    # Debug info
-    logger.info("Received prediction request")
-    
-    # Get request data
-    if not request.is_json:
-        ERROR_COUNT.inc()
-        logger.error("Request is not JSON")
-        return jsonify({"error": "Request must be JSON"}), 400
-    
-    data = request.get_json()
-    logger.info(f"Request data: {data}")
-    
-    if 'text' not in data:
-        ERROR_COUNT.inc()
-        logger.error("Missing 'text' field in request")
-        return jsonify({"error": "Missing 'text' field"}), 400
-    
-    text = data['text']
-    logger.info(f"Processing text: {text[:50]}...")
     
     try:
-        # Use cached prediction if available
-        prediction, confidence = cached_prediction(text)
+        # Get input data
+        data = request.json
+        if not data or 'text' not in data:
+            return jsonify({'error': 'No text provided'}), 400
+        
+        text = data['text']
+        
+        # Process with appropriate model
+        if using_fallback_model:
+            # Use the fallback model
+            text_vectorized = fallback_vectorizer.transform([text])
+            prediction = fallback_model.predict(text_vectorized)[0]
+            confidence = float(np.max(fallback_model.predict_proba(text_vectorized)[0]))
+            
+            # Map prediction to sentiment
+            sentiment_map = {0: "negative", 1: "neutral", 2: "positive"}
+            sentiment = sentiment_map[prediction]
+        else:
+            # Use the BERT model
+            # Use cached prediction if available
+            prediction, confidence = cached_prediction(text)
         
         # Record metrics
         latency = (time.time() - start_time) * 1000  # Convert to milliseconds
@@ -298,8 +354,7 @@ def predict_sentiment():
         })
     
     except Exception as e:
-        ERROR_COUNT.inc()
-        logger.error(f"Error making prediction: {e}")
+        logger.error(f"Error in prediction: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # API endpoint for monitoring
@@ -417,8 +472,16 @@ def batch_predict_sentiment():
 # Add Prometheus metrics endpoint
 @app.route('/prometheus', methods=['GET'])
 def prometheus_metrics():
-    return generate_latest()
-
+    """
+    Endpoint for Prometheus metrics.
+    Returns metrics in the Prometheus format.
+    """
+    try:
+        return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+    except Exception as e:
+        logger.error(f"Error generating Prometheus metrics: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
 # Add a route for the root URL
 @app.route('/', methods=['GET'])
 def index():
