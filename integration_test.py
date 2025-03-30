@@ -79,8 +79,8 @@ class TestModelServerIntegration(unittest.TestCase):
         self.assertIn('sentiment', data)
     
     def test_metrics_endpoint(self):
-        # Test the metrics endpoint
-        response = requests.get('http://localhost:8080/metrics')
+        # Test the Prometheus metrics endpoint
+        response = requests.get('http://localhost:8080/prometheus')
         self.assertEqual(response.status_code, 200)
         self.assertIn('sentiment_predictions_total', response.text)
     
