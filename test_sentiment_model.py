@@ -1,12 +1,9 @@
 import unittest
 import numpy as np
 from unittest.mock import patch, MagicMock
-from model_server import preprocess_input, predict_sentiment_internal
+from model_server import preprocess_input, predict_sentiment_internal, app
 import pandas as pd
-from flask import Flask
 import time
-
-app = Flask(__name__)
 
 class TestSentimentModel(unittest.TestCase):
     
