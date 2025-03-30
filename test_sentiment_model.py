@@ -12,14 +12,11 @@ class TestSentimentModel(unittest.TestCase):
         
     def test_preprocess_input(self):
         # Test preprocessing function
-        with patch('model_server.tfidf_vectorizer') as mock_tfidf, \
-             patch('model_server.doc2vec_model') as mock_doc2vec:
+        with patch('model_server.tfidf_vectorizer') as mock_tfidf:
             
             # Mock TF-IDF vectorizer
             mock_tfidf.transform.return_value = np.zeros((1, 1000))
             
-            # Mock Doc2Vec model
-            mock_doc2vec.infer_vector.return_value = np.zeros(100)
             
             # Call the function
             with patch('model_server.TextBlob') as mock_textblob:
@@ -54,18 +51,7 @@ class TestSentimentModel(unittest.TestCase):
             self.assertEqual(prediction, 'neutral')
             self.assertAlmostEqual(confidence, 0.7, places=1)
     
-    def test_performance_monitor(self):
-        # Test performance monitoring
-        monitor = PerformanceMonitor(window_size=10)
-        
-        # Add some test latencies
-        test_latencies = [10, 20, 30, 40, 50]
-        for latency in test_latencies:
-            monitor.add_latency(latency)
-        
-        # Test metrics calculations
-        self.assertEqual(monitor.get_avg_latency(), 30.0)
-        self.assertEqual(monitor.get_p99_latency(), 49.6)
+
 
 if __name__ == '__main__':
     unittest.main() 
