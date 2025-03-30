@@ -1,8 +1,11 @@
 import unittest
 import numpy as np
 from unittest.mock import patch, MagicMock
-from model_server import preprocess_input, predict_sentiment_internal, PerformanceMonitor
+from model_server import preprocess_input, predict_sentiment_internal
 import pandas as pd
+from flask import Flask
+
+app = Flask(__name__)
 
 class TestSentimentModel(unittest.TestCase):
     
@@ -51,7 +54,73 @@ class TestSentimentModel(unittest.TestCase):
             self.assertEqual(prediction, 'neutral')
             self.assertAlmostEqual(confidence, 0.7, places=1)
     
+    def test_api_predict(self):
+        """Test the /predict API endpoint."""
+        with patch('model_server.predict_sentiment_internal') as mock_predict:
+            # Mock the prediction function
+            mock_predict.return_value = ('positive', 0.9)
+            
+            # Create a test client
+            client = app.test_client()
+            
+            # Send a request
+            response = client.post('/predict', 
+                                  json={'text': 'Test sentence'})
+            
+            # Check response
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertEqual(data['sentiment'], 'positive')
+            self.assertEqual(data['confidence'], 0.9)
+            self.assertIn('latency_ms', data)
 
+    def test_api_predict_batch(self):
+        """Test the /predict_batch API endpoint."""
+        with patch('model_server.predict_sentiment_internal') as mock_predict:
+            # Mock the prediction function
+            mock_predict.return_value = ('positive', 0.9)
+            
+            # Create a test client
+            client = app.test_client()
+            
+            # Send a request
+            response = client.post('/predict_batch', 
+                                  json={'texts': ['Test 1', 'Test 2']})
+            
+            # Check response
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertEqual(len(data['results']), 2)
+            self.assertEqual(data['count'], 2)
+            self.assertIn('latency_ms', data)
+
+    def test_api_metrics(self):
+        """Test the /metrics API endpoint."""
+        # Create a test client
+        client = app.test_client()
+        
+        # Send a request
+        response = client.get('/metrics')
+        
+        # Check response
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertIn('total_requests', data)
+        self.assertIn('avg_latency_ms', data)
+
+    def test_api_health(self):
+        """Test the /health API endpoint."""
+        # Create a test client
+        client = app.test_client()
+        
+        # Send a request
+        response = client.get('/health')
+        
+        # Check response
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['status'], 'healthy')
+        self.assertIn('uptime', data)
 
 if __name__ == '__main__':
     unittest.main() 
