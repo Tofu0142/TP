@@ -40,11 +40,15 @@ class TestSentimentModel(unittest.TestCase):
         # Import the function
         from model_server import predict_sentiment
         
-        # Call the function
-        result = predict_sentiment("This is a test")
-        
-        # Check the result
-        self.assertIn('sentiment', result)
+        # Mock the Flask request context
+        with patch('model_server.request') as mock_request:
+            mock_request.json = {"text": "This is a test"}
+            
+            # Call the function
+            result = predict_sentiment()
+            
+            # Check the result
+            self.assertIn('sentiment', result)
     
     def test_performance_monitor(self):
         # Import the class
