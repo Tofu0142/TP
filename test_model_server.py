@@ -4,6 +4,14 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import threading
+import sys
+import os
+import subprocess
+import signal
+import pytest
+import socket
+from contextlib import closing
 
 # Test data
 test_reviews = [
@@ -19,10 +27,54 @@ test_reviews = [
     "The world-building was incredible, but the pacing was too slow."
 ]
 
-def test_model_server(num_requests=100):
-    url = "http://localhost:8080/predict"
+def find_free_port():
+    """Find a free port to use for the server."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+@pytest.fixture(scope="module")
+def server():
+    """Start the server for testing and shut it down after."""
+    # Find a free port
+    port = find_free_port()
+    
+    # Start the server as a subprocess
+    server_process = subprocess.Popen(
+        [sys.executable, "model_server.py"],
+        env=dict(os.environ, PORT=str(port)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+    
+    # Wait for server to start
+    time.sleep(5)  # Give the server some time to start
+    
+    # Check if server is running
+    try:
+        response = requests.get(f"http://localhost:{port}/health")
+        if response.status_code != 200:
+            pytest.fail(f"Server failed to start properly: {response.text}")
+    except requests.exceptions.ConnectionError:
+        # If we can't connect, kill the server and fail the test
+        server_process.terminate()
+        stdout, stderr = server_process.communicate()
+        pytest.fail(f"Failed to connect to server: {stderr.decode()}")
+    
+    # Return the server process and port
+    yield {"process": server_process, "port": port}
+    
+    # Shutdown the server
+    server_process.terminate()
+    server_process.wait()
+
+def test_model_server(server):
+    """Test the model server with real requests and measure latency."""
+    port = server["port"]
+    url = f"http://localhost:{port}/predict"
+    num_requests = 100
     latencies = []
-    results = []
     
     print(f"Sending {num_requests} requests to the model server...")
     
@@ -42,7 +94,6 @@ def test_model_server(num_requests=100):
         # Store results
         if response.status_code == 200:
             result = response.json()
-            results.append(result)
             latencies.append(latency)
         else:
             print(f"Error: {response.status_code}, {response.text}")
@@ -73,16 +124,42 @@ def test_model_server(num_requests=100):
     plt.ylabel('Count')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig("client_latency_distribution.png")
-    plt.show()
+    plt.savefig("test_latency_distribution.png")
     
-    # Return results
-    return {
-        "avg_latency": avg_latency,
-        "p95_latency": p95_latency,
-        "p99_latency": p99_latency,
-        "results": results
-    }
+    # Assert that p99 latency is below 300ms
+    assert p99_latency < 300, f"P99 latency ({p99_latency:.2f}ms) exceeds target (300ms)"
+    
+    # Test other endpoints
+    # Test /metrics endpoint
+    response = requests.get(f"http://localhost:{port}/metrics")
+    assert response.status_code == 200
+    metrics = response.json()
+    assert 'total_requests' in metrics
+    assert 'avg_latency_ms' in metrics
+    
+    # Test /health endpoint
+    response = requests.get(f"http://localhost:{port}/health")
+    assert response.status_code == 200
+    health = response.json()
+    assert health['status'] == 'healthy'
+    assert 'uptime' in health
+    
+    # Test batch prediction
+    response = requests.post(
+        f"http://localhost:{port}/predict_batch",
+        json={"texts": test_reviews[:3]}
+    )
+    assert response.status_code == 200
+    batch_result = response.json()
+    assert len(batch_result['results']) == 3
+    assert batch_result['count'] == 3
+    assert 'latency_ms' in batch_result
 
 if __name__ == "__main__":
-    test_model_server(100) 
+    # This allows running the test directly
+    server_fixture = next(server())
+    try:
+        test_model_server(server_fixture)
+    finally:
+        server_fixture["process"].terminate()
+        server_fixture["process"].wait() 

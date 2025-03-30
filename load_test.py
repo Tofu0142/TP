@@ -108,7 +108,7 @@ def load_test(concurrency=10, requests_per_worker=10, ramp_up=5):
     plt.close()
     
     return {
-        
+        'success_rate': success_rate,
         'avg_latency': np.mean(latencies),
         'p95_latency': np.percentile(latencies, 95),
         'p99_latency': np.percentile(latencies, 99)

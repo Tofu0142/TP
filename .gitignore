@@ -4,4 +4,10 @@
 .DS_Store
 bert_sentiment_model.pt
 *.png
+*.tsv
+*.tfevents
+*.model
+*.json
+*.cbm
+doc2vec_model/
 
