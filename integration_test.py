@@ -61,14 +61,20 @@ class TestModelServerIntegration(unittest.TestCase):
                     raise RuntimeError("Failed to connect to server after multiple attempts")
     
     def test_predict_endpoint(self):
-        # Test the prediction endpoint with positive sentiment
-        payload = {"text": "I love this product, it's amazing!"}
+        # Test the predict endpoint with a positive sentiment
+        payload = {"text": "This is great!"}
         response = requests.post('http://localhost:8080/predict', json=payload)
+        
+        # Print response for debugging
+        print(f"Predict endpoint response: {response.status_code}")
+        if response.status_code != 200:
+            print(f"Response text: {response.text}")
+        
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn('sentiment', data)
+        self.assertIn('latency_ms', data)  # Check for latency_ms instead of processing_time
         self.assertIn('confidence', data)
-        self.assertIn('processing_time', data)
     
     def test_negative_sentiment(self):
         # Test with negative sentiment

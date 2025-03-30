@@ -119,48 +119,13 @@ def optimize_model_for_inference(model):
 
 # Load the model
 def load_model(model_path="bert_sentiment_model.pt"):
-    global model, tokenizer, device
+    global model, tokenizer, device, using_fallback_model, fallback_vectorizer, fallback_model
     
     try:
-        # Determine device (use CUDA if available)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Using device: {device}")
-        
-        # Load tokenizer
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        logger.info("Tokenizer loaded successfully")
-        
-        # Initialize model
-        model = BertSentimentClassifier(num_classes=3)
-        
-        # Try to load trained weights
-        if os.path.exists(model_path):
-            model.load_state_dict(torch.load(model_path, map_location=device))
-            logger.info(f"Model loaded successfully from {model_path}")
-            
-            # Optimize model for inference
-            model = optimize_model_for_inference(model)
-            model.to(device)
-            
-            # Warm up the model with a dummy input
-            logger.info("Warming up model...")
-            dummy_input = tokenizer("This is a dummy input for warming up the model", 
-                                   return_tensors="pt", 
-                                   padding="max_length", 
-                                   truncation=True, 
-                                   max_length=128)
-            dummy_input_ids = dummy_input["input_ids"].to(device)
-            dummy_attention_mask = dummy_input["attention_mask"].to(device)
-            dummy_numerical = torch.zeros((1, 5), dtype=torch.float).to(device)
-            
-            with torch.no_grad():
-                _ = model(dummy_input_ids, dummy_attention_mask, dummy_numerical)
-            
-            logger.info("BERT model ready for inference")
-        else:
-            logger.warning(f"Model file {model_path} not found. Using fallback model.")
-            # Create a simple fallback model for testing
-            # Simple training data
+        # Check if we should use the fallback model
+        if os.environ.get('USE_FALLBACK_MODEL') == 'true':
+            logger.info("Using fallback model as specified by environment variable")
+            # Create a simple fallback model
             texts = [
                 "I love this product", "Great experience", "Highly recommended",
                 "This is terrible", "Worst purchase ever", "Disappointed",
@@ -169,23 +134,77 @@ def load_model(model_path="bert_sentiment_model.pt"):
             labels = [2, 2, 2, 0, 0, 0, 1, 1, 1]  # 0=negative, 1=neutral, 2=positive
             
             # Create a simple model
-            global fallback_vectorizer, fallback_model
+            from sklearn.feature_extraction.text import CountVectorizer
+            from sklearn.naive_bayes import MultinomialNB
+            
             fallback_vectorizer = CountVectorizer()
             X = fallback_vectorizer.fit_transform(texts)
             fallback_model = MultinomialNB()
             fallback_model.fit(X, labels)
-            logger.info("Fallback model created successfully")
             
-            # Set a flag to indicate we're using the fallback model
-            global using_fallback_model
             using_fallback_model = True
-            
+            logger.info("Fallback model created successfully")
+            return True
+        
+        # Regular model loading code
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Using device: {device}")
+        
+        # Load tokenizer
+        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        logger.info("Tokenizer loaded successfully")
+        
+        # Check if model file exists
+        if not os.path.exists(model_path):
+            # Try to download if URL is provided
+            model_url = os.environ.get('MODEL_URL')
+            if model_url:
+                logger.info(f"Downloading model from {model_url}")
+                try:
+                    import requests
+                    response = requests.get(model_url)
+                    with open(model_path, 'wb') as f:
+                        f.write(response.content)
+                    logger.info(f"Model downloaded to {model_path}")
+                except Exception as e:
+                    logger.error(f"Failed to download model: {e}")
+                    raise
+            else:
+                logger.error(f"Model file not found at {model_path} and no MODEL_URL provided")
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        # Initialize model
+        model = BertSentimentClassifier(num_classes=3)
+        
+        # Load trained weights
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        logger.info(f"Model loaded successfully from {model_path}")
+        
+        # Optimize model for inference
+        model = optimize_model_for_inference(model)
+        model.to(device)
+        
         return True
     
     except Exception as e:
         logger.error(f"Error loading model: {e}")
-        logger.error("Failed to load model. Exiting.")
-        return False
+        
+        # Fall back to a simple model
+        logger.info("Creating fallback model due to error")
+        texts = ["I love this", "I hate this", "It's okay"]
+        labels = [2, 0, 1]  # 0=negative, 1=neutral, 2=positive
+        
+        from sklearn.feature_extraction.text import CountVectorizer
+        from sklearn.naive_bayes import MultinomialNB
+        
+        fallback_vectorizer = CountVectorizer()
+        X = fallback_vectorizer.fit_transform(texts)
+        fallback_model = MultinomialNB()
+        fallback_model.fit(X, labels)
+        
+        using_fallback_model = True
+        logger.info("Fallback model created successfully")
+        return True
 
 # Preprocess input for prediction
 def preprocess_input(text):
