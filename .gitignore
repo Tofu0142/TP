@@ -8,6 +8,5 @@ bert_sentiment_model.pt
 *.tfevents
 *.model
 *.json
-*.cbm
 doc2vec_model/
 
