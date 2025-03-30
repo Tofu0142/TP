@@ -80,20 +80,17 @@ jobs:
         with:
           project_id: 'tp-tf-95280'
       
-      - name: Configure Docker for GCR
-        run: |
-          gcloud auth configure-docker gcr.io --quiet
       
-      - name: Pull image from Docker Hub and push to GCR
+      - name: 'Enable required APIs'
         run: |
-          docker pull ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest
-          docker tag ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest gcr.io/tp-tf-95280/sentiment-analysis:latest
-          docker push gcr.io/tp-tf-95280/sentiment-analysis:latest
+          gcloud services enable containerregistry.googleapis.com
+          gcloud services enable run.googleapis.com
       
-      - name: Deploy to Cloud Run
+      
+      - name: Deploy to Cloud Run from Docker Hub
         run: |
           gcloud run deploy sentiment-analysis \
-            --image gcr.io/tp-tf-95280/sentiment-analysis:latest \
+            --image docker.io/${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest \
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated
