@@ -197,26 +197,25 @@ class TextSelector(BaseEstimator, TransformerMixin):
         return X[self.field].apply(clean_text).values
 
 # Modified train_doc2vec_model function using simple tokenization
-def train_doc2vec_model(sentences, vector_size=100, window=5, min_count=2, epochs=20):
-    # Prepare documents
-    tagged_data = [TaggedDocument(words=simple_word_tokenize(clean_text(doc)), tags=[str(i)]) 
-                  for i, doc in enumerate(sentences)]
+def train_doc2vec_model(sentences, vector_size=100, window=5, min_count=1, workers=4, epochs=20):
+    """Train a Doc2Vec model on the given sentences."""
+    # Tokenize sentences
+    tokenized_sentences = [simple_word_tokenize(s) for s in sentences]
     
-    # Initialize model
-    model = Doc2Vec(vector_size=vector_size, 
-                    window=window, 
-                    min_count=min_count, 
-                    workers=4, 
-                    epochs=epochs)
+    # Create tagged documents
+    tagged_data = [TaggedDocument(words=tokens, tags=[str(i)]) for i, tokens in enumerate(tokenized_sentences)]
     
-    # Build vocabulary
+    # Initialize and train Doc2Vec model
+    model = Doc2Vec(vector_size=vector_size, window=window, min_count=min_count, workers=workers, epochs=epochs)
     model.build_vocab(tagged_data)
-    
-    # Train model
     model.train(tagged_data, total_examples=model.corpus_count, epochs=model.epochs)
     
-    # Save model
-    model.save("doc2vec_model")
+    # Create directory if it doesn't exist
+    os.makedirs('doc2vec_model', exist_ok=True)
+    
+    # Save model using pickle
+    with open('doc2vec_model/doc2vec.pkl', 'wb') as f:
+        pickle.dump(model, f)
     
     return model
 

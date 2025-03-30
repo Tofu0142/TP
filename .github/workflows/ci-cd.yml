@@ -25,10 +25,6 @@ jobs:
           pip install werkzeug==2.0.3
           pip install pytest pytest-cov
           
-      - name: Download NLTK resources
-        run: |
-          python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet')"
-          
       - name: Run unit tests
         run: |
           pytest -xvs
@@ -39,6 +35,12 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
       - uses: actions/checkout@v3
+      
+      - name: Set up Git LFS
+        uses: actions/setup-git-lfs@v1
+        
+      - name: Checkout LFS objects
+        run: git lfs checkout
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -65,3 +67,9 @@ jobs:
         run: |
           echo "Deploying to production server"
           # Add deployment commands here (e.g., SSH into server and pull latest image)
+          # Example:
+          # ssh ${{ secrets.PROD_SERVER_USER }}@${{ secrets.PROD_SERVER_HOST }} \
+          #   "docker pull ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest && \
+          #    docker stop sentiment-analysis || true && \
+          #    docker rm sentiment-analysis || true && \
+          #    docker run -d --name sentiment-analysis -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/sentiment-analysis:latest"
