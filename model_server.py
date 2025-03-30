@@ -14,7 +14,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from review_prediction import BertSentimentClassifier, TextBlob
 from functools import lru_cache
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
@@ -449,8 +449,16 @@ def batch_predict_sentiment():
 # Add Prometheus metrics endpoint
 @app.route('/prometheus', methods=['GET'])
 def prometheus_metrics():
-    return generate_latest()
-
+    """
+    Endpoint for Prometheus metrics.
+    Returns metrics in the Prometheus format.
+    """
+    try:
+        return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+    except Exception as e:
+        logger.error(f"Error generating Prometheus metrics: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
 # Add a route for the root URL
 @app.route('/', methods=['GET'])
 def index():
