@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from model_server import preprocess_input, predict_sentiment_internal, app
 import pandas as pd
 import time
+from scipy.sparse import csr_matrix
 
 class TestSentimentModel(unittest.TestCase):
     
@@ -13,11 +14,15 @@ class TestSentimentModel(unittest.TestCase):
         
     def test_preprocess_input(self):
         # Test preprocessing function
-        with patch('model_server.tfidf_vectorizer') as mock_tfidf:
+        with patch('model_server.tfidf_vectorizer') as mock_tfidf, \
+             patch('model_server.clean_text') as mock_clean:
             
-            # Mock TF-IDF vectorizer
-            mock_tfidf.transform.return_value = np.zeros((1, 1000))
+            # Mock clean_text function
+            mock_clean.return_value = "cleaned text"
             
+            # Mock TF-IDF vectorizer to return a sparse matrix
+            mock_sparse_matrix = csr_matrix(np.zeros((1, 1000)))
+            mock_tfidf.transform.return_value = mock_sparse_matrix
             
             # Call the function
             with patch('model_server.TextBlob') as mock_textblob:
