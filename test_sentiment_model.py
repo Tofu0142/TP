@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from model_server import preprocess_input, predict_sentiment_internal
 import pandas as pd
 from flask import Flask
+import time
 
 app = Flask(__name__)
 
@@ -110,17 +111,25 @@ class TestSentimentModel(unittest.TestCase):
 
     def test_api_health(self):
         """Test the /health API endpoint."""
-        # Create a test client
-        client = app.test_client()
-        
-        # Send a request
-        response = client.get('/health')
-        
-        # Check response
-        self.assertEqual(response.status_code, 200)
-        data = response.get_json()
-        self.assertEqual(data['status'], 'healthy')
-        self.assertIn('uptime', data)
+        with patch('model_server.time.time') as mock_time:
+            # 模拟时间函数，使其返回固定值
+            current_time = time.time()
+            mock_time.return_value = current_time
+            
+            # 模拟 start_time 全局变量
+            with patch('model_server.start_time', current_time - 60):  # 假设已运行60秒
+                
+                # 创建测试客户端
+                client = app.test_client()
+                
+                # 发送请求
+                response = client.get('/health')
+                
+                # 检查响应
+                self.assertEqual(response.status_code, 200)
+                data = response.get_json()
+                self.assertEqual(data['status'], 'healthy')
+                self.assertIn('uptime', data)
 
 if __name__ == '__main__':
     unittest.main() 
