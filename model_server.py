@@ -4,17 +4,16 @@ import json
 import logging
 import numpy as np
 import pandas as pd
-import torch
-from transformers import BertTokenizer
+import re
 from flask import Flask, request, jsonify
-from sklearn.preprocessing import StandardScaler
 from collections import deque
 import threading
 from datetime import datetime
 import matplotlib.pyplot as plt
-from review_prediction import BertSentimentClassifier, TextBlob
+from textblob import TextBlob
 from functools import lru_cache
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
+from catboost import CatBoostClassifier
+from gensim.models.doc2vec import Doc2Vec
 
 # Configure logging
 logging.basicConfig(
@@ -32,10 +31,43 @@ app = Flask(__name__)
 
 # Global variables
 model = None
-tokenizer = None
-device = None
+doc2vec_model = None
+tfidf_vectorizer = None
 request_times = deque(maxlen=1000)  # Store last 1000 request times
 latencies = deque(maxlen=1000)      # Store last 1000 latencies
+
+# Simple word tokenization function
+def simple_word_tokenize(text):
+    # First replace punctuation with spaces
+    for punct in '.,!?;:()[]{}"\'-':
+        text = text.replace(punct, ' ')
+    # Split by spaces
+    return [word for word in text.split() if word]
+
+# Clean text function
+def clean_text(text):
+    if not isinstance(text, str):
+        return ""
+    
+    # Normalization: convert to lowercase
+    text = text.lower()
+    
+    # Noise removal: delete HTML tags
+    text = re.sub(r'<.*?>', ' ', text)
+    
+    # Remove HTML entities like &nbsp;
+    text = re.sub(r'&\w+;', ' ', text)
+    
+    # Remove & character
+    text = text.replace('&', ' ')
+    
+    # Remove special characters but keep alphanumeric words
+    text = re.sub(r'[^\w\s]', ' ', text)
+    
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
 
 # Performance monitoring
 class PerformanceMonitor:
@@ -93,172 +125,136 @@ class PerformanceMonitor:
 # Initialize performance monitor
 monitor = PerformanceMonitor()
 
-# Model optimization for inference
-def optimize_model_for_inference(model):
-    model.eval()  # Set to evaluation mode
-    
-    # Quantize model if possible (reduces precision to speed up inference)
-    if hasattr(torch, 'quantization'):
-        try:
-            # Quantize the model to int8
-            model_quantized = torch.quantization.quantize_dynamic(
-                model, {torch.nn.Linear}, dtype=torch.qint8
-            )
-            return model_quantized
-        except Exception as e:
-            logger.warning(f"Quantization failed: {e}. Using original model.")
-    
-    return model
-
 # Load the model
-def load_model(model_path="bert_sentiment_model.pt"):
-    global model, tokenizer, device
+def load_model():
+    global model, doc2vec_model, tfidf_vectorizer
     
     try:
-        # Determine device (use CUDA if available)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Using device: {device}")
+        # Load CatBoost model
+        model_path = "catboost_sentiment_model.cbm"
+        if not os.path.exists(model_path):
+            logger.error(f"Model file not found: {model_path}")
+            return False
         
-        # Load tokenizer
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        logger.info("Tokenizer loaded successfully")
+        model = CatBoostClassifier()
+        model.load_model(model_path)
+        logger.info(f"CatBoost model loaded successfully from {model_path}")
         
-        # Initialize model
-        model = BertSentimentClassifier(num_classes=3)
+        # Load Doc2Vec model
+        doc2vec_path = "doc2vec_model"
+        if not os.path.exists(doc2vec_path):
+            logger.error(f"Doc2Vec model file not found: {doc2vec_path}")
+            return False
         
-        # Load trained weights
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        logger.info(f"Model loaded successfully from {model_path}")
+        doc2vec_model = Doc2Vec.load(doc2vec_path)
+        logger.info(f"Doc2Vec model loaded successfully from {doc2vec_path}")
         
-        # Optimize model for inference
-        model = optimize_model_for_inference(model)
-        model.to(device)
+        # Load TF-IDF vectorizer
+        import pickle
+        tfidf_path = "tfidf_vectorizer.pkl"
+        if not os.path.exists(tfidf_path):
+            logger.error(f"TF-IDF vectorizer file not found: {tfidf_path}")
+            return False
         
-        # Warm up the model with a dummy input
+        with open(tfidf_path, 'rb') as f:
+            tfidf_vectorizer = pickle.load(f)
+        logger.info(f"TF-IDF vectorizer loaded successfully from {tfidf_path}")
+        
+        # Warm up the model with a sample prediction
         logger.info("Warming up model...")
-        dummy_input = tokenizer("This is a dummy input for warming up the model", 
-                               return_tensors="pt", 
-                               padding="max_length", 
-                               truncation=True, 
-                               max_length=128)
-        dummy_input_ids = dummy_input["input_ids"].to(device)
-        dummy_attention_mask = dummy_input["attention_mask"].to(device)
-        dummy_numerical = torch.zeros((1, 5), dtype=torch.float).to(device)
+        sample_text = "This is a sample text to warm up the model."
+        predict_sentiment_internal(sample_text)
         
-        with torch.no_grad():
-            _ = model(dummy_input_ids, dummy_attention_mask, dummy_numerical)
-        
-        logger.info("Model ready for inference")
         return True
-    
     except Exception as e:
-        logger.error(f"Error loading model: {e}")
+        logger.error(f"Error loading model: {str(e)}")
         return False
 
 # Preprocess input for prediction
 def preprocess_input(text):
-    """
-    Preprocess text input for sentiment prediction.
+    """Preprocess input text for prediction."""
+    global tfidf_vectorizer, doc2vec_model
     
-    Args:
-        text (str): The input text to be analyzed
-        
-    Returns:
-        tuple: A tuple containing:
-            - input_ids (torch.Tensor): Tokenized input IDs
-            - attention_mask (torch.Tensor): Attention mask for the input
-            - numerical_features (torch.Tensor): Normalized numerical features
-            
-    This function:
-    1. Extracts TextBlob sentiment features
-    2. Computes text statistics (word count, character count)
-    3. Tokenizes the text using BERT tokenizer
-    4. Normalizes numerical features
-    """
-    # Create DataFrame for processing
-    df = pd.DataFrame({'sentence': [text]})
+    # Clean text
+    processed_text = clean_text(text)
     
-    # Extract TextBlob sentiment
-    df['body_sentiment'] = df['sentence'].apply(lambda x: TextBlob(x).sentiment.polarity)
-    df['title_sentiment'] = df['sentence'].apply(lambda x: TextBlob(x).sentiment.polarity)
+    # 1. TF-IDF features
+    X_tfidf = tfidf_vectorizer.transform([processed_text])
+    X_tfidf_array = X_tfidf.toarray()
     
-    # Add word count and character count
-    df['word_count'] = df['sentence'].apply(lambda x: len(x.split()))
-    df['char_count'] = df['sentence'].apply(lambda x: len(x))
+    # 2. Doc2Vec features
+    X_doc2vec = np.array([doc2vec_model.infer_vector(simple_word_tokenize(processed_text))])
     
-    # Add sentence sentiment
-    df['sentiment_score'] = df['body_sentiment']
+    # 3. Sentiment features
+    body_sentiment = TextBlob(text).sentiment.polarity
+    title_sentiment = body_sentiment  # Use same sentiment for title since we don't have a title
     
-    # Tokenize text
-    encoded = tokenizer(
-        text,
-        add_special_tokens=True,
-        return_attention_mask=True,
-        padding='max_length',
-        max_length=128,
-        truncation=True,
-        return_tensors='pt'
-    )
+    # Create feature DataFrames
+    X_tfidf_df = pd.DataFrame(X_tfidf_array, 
+                             columns=[f'tfidf_{i}' for i in range(X_tfidf_array.shape[1])])
     
-    # Extract input IDs and attention masks
-    input_ids = encoded['input_ids'].to(device)
-    attention_mask = encoded['attention_mask'].to(device)
+    X_doc2vec_df = pd.DataFrame(X_doc2vec, 
+                               columns=[f'doc2vec_{i}' for i in range(X_doc2vec.shape[1])])
     
-    # Prepare numerical features
-    numerical_features = df[['body_sentiment', 'title_sentiment']].values
+    X_sentiment_df = pd.DataFrame({
+        'body_sentiment': [body_sentiment],
+        'title_sentiment': [title_sentiment]
+    })
     
-    # Normalize numerical features
-    scaler = StandardScaler()
-    numerical_features = scaler.fit_transform(numerical_features)
+    # Combine all features
+    X = pd.concat([X_tfidf_df, X_doc2vec_df, X_sentiment_df], axis=1)
     
-    # Convert to tensor
-    numerical_features = torch.tensor(numerical_features, dtype=torch.float).to(device)
-    
-    return input_ids, attention_mask, numerical_features
+    return X
 
-# Make prediction
-def predict(input_ids, attention_mask, numerical_features):
-    with torch.no_grad():
-        outputs = model(input_ids, attention_mask, numerical_features)
-        _, preds = torch.max(outputs, dim=1)
+# Predict sentiment
+@lru_cache(maxsize=1024)
+def predict_sentiment_internal(text):
+    """Predict sentiment for input text."""
+    global model
     
-    # Convert numerical predictions to labels
-    sentiment_labels = {0: 'negative', 1: 'neutral', 2: 'positive'}
-    prediction = sentiment_labels[preds.item()]
+    start_time = time.time()
     
-    # Get confidence scores
-    probabilities = torch.nn.functional.softmax(outputs, dim=1)
-    confidence = probabilities[0][preds.item()].item()
-    
-    return prediction, confidence
+    try:
+        # Preprocess input
+        features = preprocess_input(text)
+        
+        # Make prediction
+        prediction = model.predict(features)[0]
+        probabilities = model.predict_proba(features)[0]
+        
+        # Map prediction to sentiment label
+        sentiment_labels = {0: 'negative', 1: 'neutral', 2: 'positive'}
+        sentiment = sentiment_labels[int(prediction)]
+        
+        # Get confidence (probability of predicted class)
+        confidence = float(probabilities[int(prediction)])
+        
+        return sentiment, confidence
+    except Exception as e:
+        logger.error(f"Error predicting sentiment: {str(e)}")
+        return "neutral", 0.33  # Default fallback
+    finally:
+        # Record latency
+        latency = (time.time() - start_time) * 1000  # ms
+        latencies.append(latency)
 
 # Add model caching
 @lru_cache(maxsize=1000)
 def cached_prediction(text):
     """Cache prediction results for frequently requested texts"""
-    input_ids, attention_mask, numerical_features = preprocess_input(text)
-    prediction, confidence = predict(input_ids, attention_mask, numerical_features)
+    prediction, confidence = predict_sentiment_internal(text)
     return prediction, confidence
-
-# Define Prometheus metrics
-REQUEST_COUNT = Counter('sentiment_requests_total', 'Total number of sentiment analysis requests')
-LATENCY = Histogram('sentiment_request_latency_milliseconds', 'Request latency in milliseconds')
-ERROR_COUNT = Counter('sentiment_errors_total', 'Total number of errors')
-MODEL_CONFIDENCE = Histogram('sentiment_model_confidence', 'Model confidence scores')
-SENTIMENT_DISTRIBUTION = Counter('sentiment_results', 'Distribution of sentiment results', ['sentiment'])
 
 # API endpoint for predictions
 @app.route('/predict', methods=['POST'])
 def predict_sentiment():
     start_time = time.time()
-    REQUEST_COUNT.inc()
     
     # Debug info
     logger.info("Received prediction request")
     
     # Get request data
     if not request.is_json:
-        ERROR_COUNT.inc()
         logger.error("Request is not JSON")
         return jsonify({"error": "Request must be JSON"}), 400
     
@@ -266,7 +262,6 @@ def predict_sentiment():
     logger.info(f"Request data: {data}")
     
     if 'text' not in data:
-        ERROR_COUNT.inc()
         logger.error("Missing 'text' field in request")
         return jsonify({"error": "Missing 'text' field"}), 400
     
@@ -279,9 +274,6 @@ def predict_sentiment():
         
         # Record metrics
         latency = (time.time() - start_time) * 1000  # Convert to milliseconds
-        LATENCY.observe(latency)
-        MODEL_CONFIDENCE.observe(confidence)
-        SENTIMENT_DISTRIBUTION.labels(sentiment=prediction).inc()
         
         # Add to performance monitor
         monitor.add_latency(latency)
@@ -298,7 +290,6 @@ def predict_sentiment():
         })
     
     except Exception as e:
-        ERROR_COUNT.inc()
         logger.error(f"Error making prediction: {e}")
         return jsonify({"error": str(e)}), 500
 
@@ -371,35 +362,14 @@ def batch_predict_sentiment():
     results = []
     
     try:
-        # Process texts in batches of 16
-        batch_size = 16
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i+batch_size]
-            
-            # Preprocess batch
-            batch_inputs = [preprocess_input(text) for text in batch_texts]
-            
-            # Combine into batches
-            batch_input_ids = torch.cat([x[0] for x in batch_inputs], dim=0)
-            batch_attention_mask = torch.cat([x[1] for x in batch_inputs], dim=0)
-            batch_numerical = torch.cat([x[2] for x in batch_inputs], dim=0)
-            
-            # Batch prediction
-            with torch.no_grad():
-                outputs = model(batch_input_ids, batch_attention_mask, batch_numerical)
-                probs = torch.nn.functional.softmax(outputs, dim=1)
-                _, preds = torch.max(outputs, dim=1)
-            
-            # Convert to results
-            sentiment_labels = {0: 'negative', 1: 'neutral', 2: 'positive'}
-            for j, pred in enumerate(preds):
-                idx = i + j
-                if idx < len(texts):
-                    results.append({
-                        "text": texts[idx],
-                        "sentiment": sentiment_labels[pred.item()],
-                        "confidence": probs[j][pred.item()].item()
-                    })
+        # Process each text
+        for text in texts:
+            prediction, confidence = predict_sentiment_internal(text)
+            results.append({
+                "text": text,
+                "sentiment": prediction,
+                "confidence": confidence
+            })
         
         # Calculate latency
         latency = (time.time() - start_time) * 1000
@@ -413,11 +383,6 @@ def batch_predict_sentiment():
     except Exception as e:
         logger.error(f"Error in batch prediction: {e}")
         return jsonify({"error": str(e)}), 500
-
-# Add Prometheus metrics endpoint
-@app.route('/prometheus', methods=['GET'])
-def prometheus_metrics():
-    return generate_latest()
 
 # Add a route for the root URL
 @app.route('/', methods=['GET'])
@@ -441,7 +406,6 @@ def index():
                 <li><code>POST /predict</code> - Make a single prediction</li>
                 <li><code>POST /batch_predict</code> - Make batch predictions</li>
                 <li><code>GET /metrics</code> - Get model metrics</li>
-                <li><code>GET /prometheus</code> - Get Prometheus metrics</li>
                 <li><code>GET /metrics_view</code> - Get metrics in a readable format</li>
                 <li><code>GET /test</code> - Test the sentiment analysis endpoint</li>
             </ul>
