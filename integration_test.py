@@ -82,7 +82,13 @@ class TestModelServerIntegration(unittest.TestCase):
         # Test the Prometheus metrics endpoint
         response = requests.get('http://localhost:8080/prometheus')
         self.assertEqual(response.status_code, 200)
-        self.assertIn('sentiment_predictions_total', response.text)
+        
+        # Check for the metrics that are actually present
+        self.assertIn('sentiment_requests_total', response.text)
+        self.assertIn('sentiment_request_latency_milliseconds', response.text)
+        self.assertIn('sentiment_errors_total', response.text)
+        self.assertIn('sentiment_model_confidence', response.text)
+        self.assertIn('sentiment_results_total', response.text)
     
     @classmethod
     def tearDownClass(cls):

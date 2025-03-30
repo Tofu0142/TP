@@ -262,6 +262,9 @@ def predict(input_ids, attention_mask, numerical_features):
     probabilities = torch.nn.functional.softmax(outputs, dim=1)
     confidence = probabilities[0][preds.item()].item()
     
+    # Increment the predictions counter
+    SENTIMENT_PREDICTIONS.inc()
+    
     return prediction, confidence
 
 # Add model caching
@@ -278,6 +281,7 @@ LATENCY = Histogram('sentiment_request_latency_milliseconds', 'Request latency i
 ERROR_COUNT = Counter('sentiment_errors_total', 'Total number of errors')
 MODEL_CONFIDENCE = Histogram('sentiment_model_confidence', 'Model confidence scores')
 SENTIMENT_DISTRIBUTION = Counter('sentiment_results', 'Distribution of sentiment results', ['sentiment'])
+SENTIMENT_PREDICTIONS = Counter('sentiment_predictions_total', 'Total number of sentiment predictions')
 
 # API endpoint for predictions
 @app.route('/predict', methods=['POST'])
