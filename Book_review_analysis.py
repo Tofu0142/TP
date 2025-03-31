@@ -135,3 +135,7 @@ def main():
     generate_visualizations(df)
     
     print("Analysis complete! Check 'book_review_analysis.png' for visualizations.")
+
+
+if __name__ == "__main__":
+    main()
