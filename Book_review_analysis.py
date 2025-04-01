@@ -33,6 +33,9 @@ def process_data(data):
     df['body_sentiment'] = df['text'].apply(lambda x: TextBlob(x).sentiment.polarity)
     df['title_sentiment'] = df['title'].apply(lambda x: TextBlob(x).sentiment.polarity)
     
+    # Create a general sentiment column (average of body and title sentiment)
+    df['sentiment'] = (df['body_sentiment'] + df['title_sentiment']) / 2
+    
     return df
 
 # Analyze common words in negative reviews

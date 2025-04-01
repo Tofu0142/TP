@@ -236,29 +236,23 @@ def visualize_results(df, y_test, y_pred, conf_matrix):
     plt.figure(figsize=(15, 12))
     
     # Plot 1: Sentiment distribution
-    plt.subplot(2, 2, 1)
+    plt.subplot(1, 3, 1)
     sns.countplot(x='sentiment', data=df)
     plt.title('Sentiment Distribution')
     plt.xlabel('Sentiment')
     plt.ylabel('Count')
     
-    # Plot 2: Rating distribution
-    plt.subplot(2, 2, 2)
-    sns.histplot(df['rating'], bins=5, kde=True)
-    plt.title('Rating Distribution')
-    plt.xlabel('Rating')
-    plt.ylabel('Count')
     
-    # Plot 3: Confusion matrix
-    plt.subplot(2, 2, 3)
+    # Plot 2: Confusion matrix
+    plt.subplot(1, 3, 2)
     sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', 
                 xticklabels=np.unique(y_test), yticklabels=np.unique(y_test))
     plt.title('Confusion Matrix')
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
     
-    # Plot 4: F1 score by sentiment
-    plt.subplot(2, 2, 4)
+    # Plot 3: F1 score by sentiment
+    plt.subplot(1, 3, 3)
     report_dict = classification_report(y_test, y_pred, output_dict=True)
     accuracies = {k: v['f1-score'] for k, v in report_dict.items() 
                  if k in ['negative', 'neutral', 'positive']}
@@ -469,5 +463,5 @@ def main():
         print(f"Predicted sentiment: {predictions[i]}")
         print("---")
 
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()
